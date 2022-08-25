@@ -1,0 +1,151 @@
+---
+date: now
+format:
+    html:
+        page-layout: full
+    pdf:
+      documentclass: ctexart
+params:
+    ter: All
+    customer: All
+    order: All
+knitr:
+    opts_chunk:
+          echo: false
+          message: false
+          warning: false
+---
+
+```{r}
+ter <- params$ter
+customer <- params$customer
+order <- params$order
+
+format_param <- function(x, suffix) {
+  if (x == "All") {
+    paste0("All ", suffix)
+  } else {
+    paste0(suffix, " ", x)
+  }
+}
+
+title <- sprintf("%s, %s, %s", 
+                 format_param(ter, "territory"), 
+                 format_param(customer, "customer"), 
+                 format_param(order, "order"))
+```
+
+
+# Report for `r title`
+
+## Introduction 
+
+
+```{r}
+library(dplyr)
+library(pool)
+
+territory_cond <- if (ter == "All") {
+    TRUE
+} else if (ter == "NA") {
+    quote(is.na(territory))
+} else {
+    quote(territory == ter)
+}
+
+customer_cond <- if (customer == "All") {
+    TRUE
+}  else {
+    quote(customername == customer)
+}
+
+order_cond <- if (order == "All") {
+    TRUE
+} else {
+    quote(ordernumber == order)
+}
+```
+
+
+
+
+```{r}
+db <- dbPool(
+        RPostgreSQL::PostgreSQL(),
+        dbname = "qiushi",
+        host = "localhost",
+        port = 5432,
+        user = Sys.getenv("PG_USERNAME"),
+        password = Sys.getenv("PG_PASSWORD")
+)
+sales <- tbl(db, "sales") |>
+    dplyr::filter(!!territory_cond & !!customer_cond & !!order_cond) |>
+    select(territory, country, customer_name = customername, order_number = ordernumber,
+           deal_size = dealsize, price = priceeach, quantity = quantityordered,
+           year = year_id, qtr = qtr_id, sales, status) |>
+    collect()
+```
+
+
+The data based on your query has `r nrow(sales)` deals, ranging from `r min(sales$year)` to `r max(sales$year)`. 
+
+Sample data
+
+```{r setup}
+knitr::kable(head(sales))
+```
+
+## Plots 
+
+
+
+```{r}
+library(ggplot2)
+theme_set(theme_minimal())
+theme_update(panel.grid.minor = element_blank())
+```
+
+
+```{r}
+if (ter == "All") TRUE else FALSE
+```
+
+
+```{r}
+#| eval: !expr (if ter == "All" TRUE else FALSE)
+#| fig-cap: !expr (if ter == "All" "All things" else "not all things")
+sales |>
+  dplyr::count(territory) |> 
+  ggplot(aes(forcats::fct_reorder(territory, n), 
+             n)) + 
+  geom_col() + 
+  labs(x = NULL,
+       y = NULL,
+       title = "Total Deals by Territory")
+```
+
+
+```{r}
+#| layout-ncol: 2 
+grouped_sales <- sales |> 
+  group_by(year, qtr) |> 
+  summarise(total_quantities = sum(quantity, na.rm = TRUE),
+            avg_price = mean(price, na.rm = TRUE))
+
+
+ggplot(grouped_sales, aes(year, avg_price)) + 
+  geom_line() + 
+  facet_wrap(~ qtr) + 
+  labs(x = NULL, 
+       y = NULL, 
+       title = "Average Price")
+
+ggplot(grouped_sales, aes(year, total_quantities)) + 
+  geom_line() + 
+  facet_wrap(~ qtr) + 
+  labs(x = NULL,
+       y = NULL,
+       title = "Total Quantities")
+```
+
+

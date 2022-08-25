@@ -1,0 +1,113 @@
+---
+title: "Sales Dashboard"
+format:
+    html:
+        page-layout: full
+server: shiny
+---
+
+```{r}
+#| context: setup
+#| include: false
+library(shiny)
+source("globals.R")
+```
+
+```{r db-connect}
+#| context: data
+#| include: false
+#| cache: true
+db <- create_pool()
+onStop(function() {
+  poolClose(db)
+})
+sales <- read_sales(db) |> slice_sample(n = 300)
+```
+
+```{r ui-sidebar}
+#| panel: sidebar
+selectInput("territory", "Territory", choices = c("All", unique(sales$territory)))
+selectInput("customername", "Customer", choices = NULL)
+selectInput("ordernumber", "Order number", choices = NULL)
+
+div(
+  downloadButton("report", "download report")
+)
+```
+
+```{r ui-main}
+#| panel: fill
+DTOutput("tbl")
+```
+
+
+
+```{r}
+#| context: server
+territory_df <- reactive({
+    if (identical(input$territory, "All")) {
+        sales
+    } else {
+        if (input$territory == "NA") {
+            sales |> dplyr::filter(is.na(territory))
+        } else {
+            sales |> dplyr::filter(territory == !!input$territory)
+        }
+    }
+})
+
+customer_df <- reactive({
+    if (identical(input$customername, "All")) {
+        territory_df()
+    } else {
+        territory_df() |> dplyr::filter(customername == !!input$customername)
+    }
+})
+
+order_df <- reactive({
+    req(input$customername)
+    if (identical(input$ordernumber, "All")) {
+        customer_df()
+    } else {
+        customer_df() |> dplyr::filter(ordernumber == !!input$ordernumber)
+    }
+})
+
+observeEvent(input$territory, {
+    groups <- split(territory_df(), territory_df()$territory) %>%
+        purrr::map(~ as.list(unique(.$customername)))
+
+    updateSelectInput(inputId = "customername", choices = make_choices(groups))
+})
+
+observeEvent(input$customername, {
+    groups <- split(customer_df(), customer_df()$customername) %>%
+         purrr::map(~ as.list(unique(.$ordernumber)))
+
+    updateSelectInput(inputId = "ordernumber", choices = make_choices(groups))
+})
+
+
+output$tbl <- renderDataTable({
+    order_df()
+})
+
+output$report <- downloadHandler(
+  filename = "report.pdf",
+  content = function(file) {
+    params <- list(ter = input$territory, 
+                   customer = input$customername,
+                   order = input$ordernumber)
+    
+    id <- notify("Rendering report...")
+    on.exit(removeNotification(id), add = TRUE)
+
+    callr::r(
+      render_report,
+      list(input = "report.qmd", 
+           params = params,
+           output_file = file)
+    )
+  }
+)
+```
